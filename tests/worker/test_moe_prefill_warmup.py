@@ -88,7 +88,7 @@ def test_warmup_runs_one_eager_dummy_batch_per_size(moe_detection):
     assert sizes == moe_prefill_warmup_sizes(8, 32768)
     assert [num_tokens for num_tokens, _ in worker.model_runner.calls] == sizes
     for _, kwargs in worker.model_runner.calls:
-        assert kwargs == {"skip_eplb": True, "remove_lora": False}
+        assert kwargs == {"force_attention": True, "skip_eplb": True, "remove_lora": False}
 
 
 def test_warmup_skips_models_without_fused_moe(moe_detection):
@@ -121,7 +121,7 @@ class _FakeMoERunner:
 @pytest.fixture
 def fake_fused_moe_module(monkeypatch):
     module = ModuleType("vllm.model_executor.layers.fused_moe")
-    module.MoERunner = _FakeMoERunner
+    monkeypatch.setattr(module, "MoERunner", _FakeMoERunner, raising=False)
     monkeypatch.setitem(sys.modules, "vllm.model_executor.layers.fused_moe", module)
 
 

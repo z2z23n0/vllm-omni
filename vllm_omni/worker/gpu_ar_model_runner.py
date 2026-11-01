@@ -415,6 +415,25 @@ class GPUARModelRunner(
         super().load_model(*args, **kwargs)
         self._resolve_duplex_sampling_hook(force=True)
 
+    def profile_run(self, randomize_inputs: bool = False) -> None:
+        mm_config = self.model_config.multimodal_config
+        mm_budget = self.mm_budget
+        if (
+            self.supports_mm_inputs
+            and mm_config is not None
+            and not mm_config.skip_mm_profiling
+            and mm_budget is not None
+            and mm_budget.get_encoder_budget() > 0
+            and "audio" in mm_budget.mm_max_toks_per_item
+            and mm_budget.get_modality_with_max_tokens() != "audio"
+        ):
+            # Upstream profiles only the largest modality (video for Qwen3-Omni),
+            # leaving audio attention to compile during the first live request.
+            audio_inputs = self._get_mm_dummy_batch("audio", 1)
+            self.model.embed_multimodal(**audio_inputs)
+            del audio_inputs
+        super().profile_run(randomize_inputs=randomize_inputs)
+
     def _make_buffer(self, *size, dtype, numpy=True):
         # Prevent ray from pinning the buffer due to large size
         from vllm_omni.distributed.ray_utils.utils import (

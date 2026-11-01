@@ -147,7 +147,9 @@ def warm_up_moe_prefill_kernels(worker: Any) -> list[int]:
 
     start = time.perf_counter()
     for size in sizes:
-        model_runner._dummy_run(size, skip_eplb=True, remove_lora=False)
+        # Without attention metadata, prefill attention returns zeros and its
+        # kernels remain cold until the first request.
+        model_runner._dummy_run(size, force_attention=True, skip_eplb=True, remove_lora=False)
     logger.info(
         "MoE prefill warmup ran %d batch sizes (%d..%d) in %.2fs.",
         len(sizes),

@@ -15,6 +15,8 @@ from unittest.mock import Mock, patch
 import numpy as np
 import pytest
 import torch
+from vllm.config import ModelConfig, MultiModalConfig
+from vllm.multimodal.encoder_budget import MultiModalBudget
 from vllm.sampling_params import SamplingParams
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.outputs import SamplerOutput
@@ -39,6 +41,46 @@ from vllm_omni.worker.runner_assisted_metadata import RunnerAssistedFullAttentio
 from vllm_omni.worker.sampling_utils import clamp_prompt_ids_to_penalty_padding
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
+
+@pytest.mark.parametrize(
+    "supports_mm,skip_profiling,encoder_budget,modalities,profiled_modality,expect_audio",
+    [
+        (True, False, 32768, {"audio": 1500, "video": 32768}, "video", True),
+        (True, False, 1500, {"audio": 1500}, "audio", False),
+        (True, False, 32768, {"video": 32768}, "video", False),
+        (True, False, 0, {"audio": 1500, "video": 32768}, "video", False),
+        (True, True, 32768, {"audio": 1500, "video": 32768}, "video", False),
+        (False, False, 0, {}, None, False),
+    ],
+)
+def test_profile_warms_audio_when_upstream_profiles_another_modality(
+    supports_mm, skip_profiling, encoder_budget, modalities, profiled_modality, expect_audio
+):
+    runner = object.__new__(GPUARModelRunner)
+    runner.supports_mm_inputs = supports_mm
+    runner.model_config = Mock(
+        spec=ModelConfig,
+        multimodal_config=MultiModalConfig(skip_mm_profiling=skip_profiling) if supports_mm else None,
+    )
+    runner.mm_budget = Mock(spec=MultiModalBudget, mm_max_toks_per_item=modalities) if supports_mm else None
+    if runner.mm_budget is not None:
+        runner.mm_budget.get_encoder_budget.return_value = encoder_budget
+        runner.mm_budget.get_modality_with_max_tokens.return_value = profiled_modality
+    audio_inputs = {"input_audio_features": torch.zeros(1)}
+    runner._get_mm_dummy_batch = Mock(return_value=audio_inputs)
+    runner.model = Mock()
+
+    with patch.object(gpu_ar_model_runner.OmniGPUModelRunner, "profile_run") as upstream_profile:
+        runner.profile_run(randomize_inputs=True)
+
+    upstream_profile.assert_called_once_with(randomize_inputs=True)
+    if expect_audio:
+        runner._get_mm_dummy_batch.assert_called_once_with("audio", 1)
+        runner.model.embed_multimodal.assert_called_once_with(**audio_inputs)
+    else:
+        runner._get_mm_dummy_batch.assert_not_called()
+        runner.model.embed_multimodal.assert_not_called()
 
 
 def _make_runner(engine_output_type: str | None, downstream_req_ids: set[str]) -> GPUARModelRunner:
